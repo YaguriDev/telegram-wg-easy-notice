@@ -1,0 +1,25 @@
+{
+  "name": "wg-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/index.js"
+  },
+  "author": "Yaguri",
+  "dependencies": {
+    "axios": "^1.12.2",
+    "dotenv": "^17.2.3",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "@types/node-telegram-bot-api": "^0.64.11",
+    "i": "^0.3.7",
+    "npm": "^11.6.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  },
+  "description": "A minimal Node.js bot that connects to a WireGuard Easy server for check users.",
+  "main": "index.js",
+  "license": "ISC"
+}
