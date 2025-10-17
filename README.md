@@ -1,6 +1,6 @@
 # WireGuard Easy Telegram Bot
 
-A reliable Telegram bot for monitoring WireGuard Easy clients and notifying when VPN subscriptions are about to expire.
+A reliable Telegram bot for monitoring and management WireGuard Easy clients and notifying when VPN subscriptions are about to expire.
 
 ### Features
 
@@ -8,9 +8,14 @@ A reliable Telegram bot for monitoring WireGuard Easy clients and notifying when
 - Notifies by thresholds days before expiration
 - Safe cache updates and auto-cleanup
 - `/clients` command (owner-only)
+- `/clients <count>` command (see only N clients sort by days left) (owner-only)
+- `/client <id>` command (owner-only)
+- `/time <id> <-+days>` command (owner only)
 - Auto resets cache
 
 ### Setup
+
+- Create and edit .env file (see .env.example), after execute:
 
 ```bash
 npm install

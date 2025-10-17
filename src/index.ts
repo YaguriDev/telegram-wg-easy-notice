@@ -76,7 +76,7 @@ const formatClient = (c: Client): string => {
   const daysStatus = daysCount ? (daysCount <= 0 ? "Expired" : daysCount === 1 ? "1 day left" : `${daysCount} days left`) : "Infinite";
 
   return (
-    `${online} <b>${c.name}</b>\n` +
+    `${online} <b>${c.name}</b> (${c.id})\n` +
     `├─ Enabled: <b>${c.enabled}</b>\n` +
     `├─ IP: <b>${c.endpoint || "—"}</b>\n` +
     `├─ Days left: <b>${daysStatus}</b>\n` +
@@ -111,7 +111,7 @@ const processClients = async () => {
 
       if (thresholdsToNotify.length > 0) {
         const expiresDate = c.expiresAt ? new Date(c.expiresAt) : null;
-        await notify(`⏳ <b>${c.name}</b> subscription expires in <b>${left} day(s)</b>\n📅 ${expiresDate ? expiresDate.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "∞"}`);
+        await notify(`⏳ <b>${c.name}</b> (${c.id}) subscription expires in <b>${left} day(s)</b>\n📅 ${expiresDate ? expiresDate.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "∞"}`);
         cache[id] = { lastDaysLeft: left, lastNotified: new Date().toISOString() };
       } else {
         cache[id] = { ...prev, lastDaysLeft: left };
@@ -128,11 +128,76 @@ const processClients = async () => {
   }
 };
 
-bot.onText(/\/clients/, async (msg) => {
-  if (String(msg.from?.id) !== TELEGRAM_OWNER_ID) return;
+const changeClientTime = async (id: number, days: number): Promise<boolean> => {
+  try {
+    const { data: client } = await api.get(`/api/client/${id}`);
+
+    if (!client) {
+      await notify(`⚠️ Client ${id} not found.`);
+      return false;
+    }
+
+    if (!client.expiresAt) {
+      await notify(`⚠️ Client ${id} has infinite subscription.`);
+      return false;
+    }
+
+    let newExpiresAt = new Date(client.expiresAt);
+    if (newExpiresAt < new Date()) {
+      newExpiresAt = new Date();
+    }
+
+    newExpiresAt.setDate(newExpiresAt.getDate() + days);
+
+    const updatedClient = { ...client, expiresAt: newExpiresAt.toISOString() };
+    await api.post(`/api/client/${id}`, updatedClient);
+
+    return true;
+  } catch (err: any) {
+    await notify(`⚠️ Failed to change time for client ${id}: ${err.message}`);
+    return false;
+  }
+};
+
+bot.onText(/\/time (\d+) ([+-]?\d+)/, async (msg, match) => {
+  if (!match || String(msg.from?.id) !== TELEGRAM_OWNER_ID) return;
+
+  const [, id, daysStr] = match;
+  const days = Number(daysStr);
+
+  if (!id || isNaN(days)) {
+    return await bot.sendMessage(msg.chat.id, "❌ Usage: <b>/time <client_id> <days></b>\nExample: <code>/time 1 +30</code> or <code>/time 1 -7</code>", { parse_mode: "HTML" });
+  }
+
+  const action = days > 0 ? `extended by <b>+${days}</b>` : `reduced by <b>${days}</b>`;
+  const success = await changeClientTime(Number(id), days);
+
+  await bot.sendMessage(msg.chat.id, success ? `✅ Client <b>${id}</b> ${action} days` : `❌ Failed to change time for client <b>${id}</b>`, { parse_mode: "HTML" });
+});
+
+bot.onText(/\/client (\d+)/, async (msg, match) => {
+  if (!match || String(msg.from?.id) !== TELEGRAM_OWNER_ID) return;
+
+  const [, id] = match;
+  if (!id) return await bot.sendMessage(msg.chat.id, "❌ Usage: <b>/client <client_id></b>", { parse_mode: "HTML" });
 
   try {
-    const clients = (await fetchClients()).sort((a, b) => {
+    const { data: client } = await api.get(`/api/client/${id}`);
+    if (!client) return await bot.sendMessage(msg.chat.id, `❌ Client <b>${id}</b> not found`, { parse_mode: "HTML" });
+
+    await bot.sendMessage(msg.chat.id, formatClient(client), { parse_mode: "HTML" });
+  } catch (err: any) {
+    await bot.sendMessage(msg.chat.id, `❌ Failed to fetch client <b>${id}</b>`, { parse_mode: "HTML" });
+  }
+});
+
+bot.onText(/\/clients(?: (\d+))?/, async (msg, match) => {
+  if (String(msg.from?.id) !== TELEGRAM_OWNER_ID) return;
+
+  const n = match && match[1] ? Number(match[1]) : undefined;
+
+  try {
+    let clients = (await fetchClients()).sort((a, b) => {
       const daysA = daysLeft(a.expiresAt);
       const daysB = daysLeft(b.expiresAt);
 
@@ -141,6 +206,8 @@ bot.onText(/\/clients/, async (msg) => {
 
       return valueA - valueB;
     });
+
+    if (n) clients = clients.slice(0, n);
 
     if (!clients.length) {
       await bot.sendMessage(msg.chat.id, "❌ No clients found.");
@@ -166,8 +233,18 @@ bot.onText(/\/clients/, async (msg) => {
   }
 });
 
+const addCommandsInBot = async () => {
+  await bot.setMyCommands([
+    { command: "clients", description: "List of clients [N]" },
+    { command: "client", description: "Info about client <id>" },
+    { command: "time", description: "Change time for client <id> <+/-days>" },
+  ]);
+};
+
 const start = async () => {
+  await addCommandsInBot();
   await processClients();
+
   const interval = Number(CHECK_INTERVAL_MINUTES || 10) * 60 * 1000;
   setInterval(processClients, interval);
 
