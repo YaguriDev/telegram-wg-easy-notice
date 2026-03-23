@@ -1,43 +1,82 @@
-# WireGuard Easy Telegram Bot
+# WireGuard Easy Bot
 
-A reliable Telegram bot for monitoring and management WireGuard Easy clients and notifying when VPN subscriptions are about to expire.
+Telegram-бот для управления клиентами WireGuard Easy с поддержкой клиентского интерфейса.
 
-### Features
+## Возможности
 
-- Fetches clients from `/api/client` via Basic Auth
-- Notifies by thresholds days before expiration
-- Safe cache updates and auto-cleanup
-- `/clients` command (owner-only)
-- `/clients <count>` command (see only N clients sort by days left) (owner-only)
-- `/client <id>` command (owner-only)
-- `/time <id> <-+days>` command (owner only)
-- Auto resets cache
+### Для администратора
 
-### Setup
+| Команда                 | Описание                                         |
+| ----------------------- | ------------------------------------------------ |
+| `/clients [N]`          | Список клиентов (с inline-кнопками)              |
+| `/client <id>`          | Инфо о конкретном клиенте                        |
+| `/extend <id>`          | Быстрое продление на **+30 дней**                |
+| `/time <id> <±days>`    | Изменить подписку на произвольное кол-во дней    |
+| `/gencode <wg_id>`      | Сгенерировать одноразовый инвайт-код для клиента |
+| `/link <wg_id> <tg_id>` | Вручную привязать WG-клиента к Telegram          |
+| `/unlink <wg_id>`       | Отвязать клиента                                 |
+| `/linked`               | Список всех привязок                             |
 
-- Create and edit .env file (see .env.example), after execute:
+**Inline-кнопки** под каждым клиентом:
+
+- `+30 дней` — продлить и обновить карточку
+- `Инфо` — обновить данные в карточке
+- `Уведомить` — отправить клиенту актуальный статус
+
+### Для клиентов
+
+| Команда         | Описание                                 |
+| --------------- | ---------------------------------------- |
+| `/start <code>` | Привязать аккаунт по инвайт-коду         |
+| `/me`           | Посмотреть статус подписки (дни, трафик) |
+
+## Привязка клиента
+
+### Способ 1: инвайт-код (клиент привязывается сам)
+
+1. Администратор: `/gencode <wg_id>`
+2. Бот выдаёт код и ссылку вида `t.me/BOT?start=XXXXXXXX`
+3. Клиент переходит по ссылке
+4. Администратору приходит запрос с кнопками **Подтвердить / Отклонить**
+5. После подтверждения клиент получает уведомление
+
+### Способ 2: ручная привязка (администратор сам)
+
+```
+/link abc123 987654321
+```
+
+## Уведомления
+
+- При истечении подписки (пороги задаются в `THRESHOLD_DAYS`) уведомление получает **и администратор, и клиент** (если привязан)
+- Администратор может вручную отправить клиенту статус через кнопку **Уведомить**
+
+## Установка
 
 ```bash
 npm install
-npm run start
+cp .env.example .env
+# Заполнить .env
+npm start
 ```
 
-### DevOps
+## Переменные окружения
 
-```bash
-# Download Node + Npm
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
+| Переменная               | Описание                                          |
+| ------------------------ | ------------------------------------------------- |
+| `WG_BASE_URL`            | URL вашего WireGuard Easy                         |
+| `WG_USERNAME`            | Логин WG Easy                                     |
+| `WG_PASSWORD`            | Пароль WG Easy                                    |
+| `TELEGRAM_TOKEN`         | Токен бота                                        |
+| `TELEGRAM_OWNER_ID`      | Ваш Telegram ID                                   |
+| `CHECK_INTERVAL_MINUTES` | Интервал проверки (по умолчанию 10)               |
+| `THRESHOLD_DAYS`         | Пороги уведомлений, через запятую (напр. `7,3,1`) |
+| `CACHE_PATH`             | Путь к cache.json (опционально)                   |
+| `CLIENTS_DB_PATH`        | Путь к clients.json (опционально)                 |
+| `INVITE_CODES_PATH`      | Путь к invite_codes.json (опционально)            |
 
-# Clone Repo + Build
-git clone https://github.com/YaguriDev/telegram-wg-easy-notice.git
-cd telegram-wg-easy-notice
-npm install
-npm run build
+## Файлы данных
 
-# Startup
-sudo npm install -g pm2
-pm2 start dist/index.js --name "wg-bot"
-pm2 save
-pm2 startup
-```
+- `cache.json` — кэш последних проверок (как раньше)
+- `clients.json` — привязки WG-клиентов к Telegram
+- `invite_codes.json` — активные одноразовые коды
