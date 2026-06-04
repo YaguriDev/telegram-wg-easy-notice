@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Panel</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+
+      :root {
+        --bg: #111113;
+        --card: #1c1c1f;
+        --card2: #242428;
+        --line: rgba(255, 255, 255, 0.07);
+        --line2: rgba(255, 255, 255, 0.12);
+        --t1: #f2f2f5;
+        --t2: #888890;
+        --t3: #3a3a42;
+        --green: #34c759;
+        --green-bg: rgba(52, 199, 89, 0.1);
+        --amber: #ff9f0a;
+        --amber-bg: rgba(255, 159, 10, 0.1);
+        --red: #ff453a;
+        --red-bg: rgba(255, 69, 58, 0.1);
+        --blue: #0a84ff;
+        --blue-bg: rgba(10, 132, 255, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        background: var(--bg);
+        color: var(--t1);
+        font-family:
+          "Inter",
+          -apple-system,
+          sans-serif;
+        min-height: 100dvh;
+        font-size: 15px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .wrap {
+        max-width: 420px;
+        margin: 0 auto;
+        padding: 0 16px 48px;
+      }
+
+      .hdr {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 0 0;
+      }
+      .hdr-left h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.3px;
+      }
+      .hdr-left p {
+        font-size: 12px;
+        color: var(--t2);
+        margin-top: 2px;
+      }
+
+      .avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: var(--card2);
+        border: 1px solid var(--line2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--t2);
+        flex-shrink: 0;
+      }
+
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--t2);
+      }
+      .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--green);
+        animation: pulse 2.5s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.4);
+        }
+        50% {
+          opacity: 0.7;
+          box-shadow: 0 0 0 4px rgba(52, 199, 89, 0);
+        }
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 20px;
+      }
+      .stat {
+        background: var(--card);
+        border-radius: 12px;
+        padding: 14px 12px;
+        border: 1px solid var(--line);
+      }
+      .stat-val {
+        font-size: 20px;
+        font-weight: 600;
+        line-height: 1;
+      }
+      .stat-lbl {
+        font-size: 11px;
+        color: var(--t2);
+        margin-top: 5px;
+      }
+
+      .sec-lbl {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--t2);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        margin: 24px 0 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .sec-lbl span {
+        font-weight: 400;
+        color: var(--t3);
+        text-transform: none;
+        letter-spacing: 0;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        margin-bottom: 8px;
+        overflow: hidden;
+        cursor: pointer;
+        transition: border-color 0.15s;
+      }
+      .card:active {
+        border-color: var(--line2);
+      }
+
+      .card.online {
+        border-left: 2px solid var(--green);
+      }
+      .card.expiring {
+        border-left: 2px solid var(--amber);
+      }
+      .card.expired {
+        border-left: 2px solid var(--red);
+      }
+
+      .card-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 14px 12px;
+      }
+
+      .card-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+      }
+      .card-icon.online {
+        background: var(--green-bg);
+      }
+      .card-icon.expiring {
+        background: var(--amber-bg);
+      }
+      .card-icon.expired {
+        background: var(--red-bg);
+      }
+      .card-icon.offline {
+        background: var(--card2);
+      }
+
+      .card-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .card-name {
+        font-size: 14px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .card-sub {
+        font-size: 12px;
+        color: var(--t2);
+        margin-top: 2px;
+      }
+
+      .card-right {
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .card-days {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .card-days.g {
+        color: var(--green);
+      }
+      .card-days.a {
+        color: var(--amber);
+      }
+      .card-days.r {
+        color: var(--red);
+      }
+      .card-days.m {
+        color: var(--t2);
+      }
+      .card-status {
+        font-size: 11px;
+        color: var(--t2);
+        margin-top: 2px;
+      }
+
+      .prog {
+        height: 2px;
+        background: var(--line);
+        margin: 0 14px;
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      .prog-fill {
+        height: 100%;
+        border-radius: 1px;
+        transition: width 0.4s ease;
+      }
+
+      .card-body {
+        display: none;
+      }
+      .card.open .card-body {
+        display: block;
+      }
+
+      .card-rows {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-top: 1px solid var(--line);
+        margin-top: 12px;
+      }
+      .card-row {
+        padding: 11px 14px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .card-row:nth-child(2n) {
+        border-right: none;
+      }
+      .card-row:nth-last-child(-n + 2) {
+        border-bottom: none;
+      }
+
+      .row-lbl {
+        font-size: 10px;
+        color: var(--t3);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        margin-bottom: 3px;
+      }
+      .row-val {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .row-val.mono {
+        font-variant-numeric: tabular-nums;
+      }
+      .row-val.g {
+        color: var(--green);
+      }
+      .row-val.a {
+        color: var(--amber);
+      }
+      .row-val.r {
+        color: var(--red);
+      }
+      .row-val.m {
+        color: var(--t2);
+        font-size: 11px;
+        font-weight: 400;
+      }
+
+      .dl-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin: 12px 14px 14px;
+        padding: 10px;
+        background: var(--blue-bg);
+        border: 1px solid rgba(10, 132, 255, 0.2);
+        border-radius: 10px;
+        color: var(--blue);
+        font-size: 13px;
+        font-weight: 500;
+        font-family: inherit;
+        text-decoration: none;
+        transition: background 0.12s;
+      }
+      .dl-btn:active {
+        background: rgba(10, 132, 255, 0.18);
+      }
+
+      .screen {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 70dvh;
+        gap: 12px;
+        text-align: center;
+      }
+      .screen-ico {
+        font-size: 40px;
+      }
+      .screen-ttl {
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .screen-sub {
+        font-size: 13px;
+        color: var(--t2);
+        line-height: 1.5;
+        max-width: 240px;
+      }
+
+      .spinner {
+        width: 28px;
+        height: 28px;
+        border: 2px solid var(--line2);
+        border-top-color: var(--t2);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .intro .card {
+        animation: slideUp 0.3s ease both;
+      }
+      .intro .card:nth-child(1) {
+        animation-delay: 0.04s;
+      }
+      .intro .card:nth-child(2) {
+        animation-delay: 0.08s;
+      }
+      .intro .card:nth-child(3) {
+        animation-delay: 0.12s;
+      }
+      .intro .card:nth-child(4) {
+        animation-delay: 0.16s;
+      }
+      .intro .card:nth-child(5) {
+        animation-delay: 0.2s;
+      }
+      .intro .card:nth-child(6) {
+        animation-delay: 0.24s;
+      }
+      .intro .stat {
+        animation: slideUp 0.28s ease both;
+      }
+      .intro .stat:nth-child(1) {
+        animation-delay: 0s;
+      }
+      .intro .stat:nth-child(2) {
+        animation-delay: 0.05s;
+      }
+      .intro .stat:nth-child(3) {
+        animation-delay: 0.1s;
+      }
+
+      @keyframes slideUp {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .updated {
+        animation: flash 0.4s ease;
+      }
+      @keyframes flash {
+        0% {
+          background: var(--card2);
+        }
+        100% {
+          background: var(--card);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap" id="root">
+      <div class="screen"><div class="spinner"></div></div>
+    </div>
+
+    <script>
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.ready();
+        tg.expand();
+        tg.setHeaderColor?.("#111113");
+        tg.setBackgroundColor?.("#111113");
+      }
+
+      function bytes(n) {
+        n = Number(n) || 0;
+        if (!n) return "0 B";
+        if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GB";
+        if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+        if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+        return n + " B";
+      }
+
+      function dt(iso) {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function daysLeft(exp) {
+        if (!exp) return null;
+        return Math.ceil((new Date(exp) - Date.now()) / 86400000);
+      }
+
+      function online(h) {
+        return h && Date.now() - new Date(h) < 180000;
+      }
+
+      function cardState(c) {
+        const d = daysLeft(c.expiresAt);
+        if (!c.enabled || (d !== null && d <= 0)) return "expired";
+        if (d !== null && d <= 5) return "expiring";
+        if (online(c.latestHandshakeAt)) return "online";
+        return "offline";
+      }
+
+      function daysStr(d) {
+        if (d === null) return "∞";
+        if (d <= 0) return "истёк";
+        return d + " д.";
+      }
+
+      function daysClass(d) {
+        if (d === null) return "m";
+        if (d <= 0) return "r";
+        if (d <= 5) return "a";
+        return "g";
+      }
+
+      function barW(d) {
+        if (d === null) return 100;
+        return Math.min(100, Math.max(2, (d / 30) * 100));
+      }
+
+      function barColor(state) {
+        if (state === "online") return "var(--green)";
+        if (state === "expiring") return "var(--amber)";
+        if (state === "expired") return "var(--red)";
+        return "var(--line2)";
+      }
+
+      function stateIcon(state) {
+        if (state === "online") return "●";
+        if (state === "expiring") return "◐";
+        if (state === "expired") return "○";
+        return "○";
+      }
+
+      function prettyName(name) {
+        const p = name.split("_");
+        if (p.length >= 3) return p.slice(1, -1).join(" ");
+        return name;
+      }
+
+      function prettyDevice(name) {
+        const p = name.split("_");
+        return p.length >= 2 ? p[p.length - 1] : "";
+      }
+
+      let firstRender = true;
+      let openCards = new Set();
+      let lastData = null;
+
+      function authHeaders() {
+        const h = { "Content-Type": "application/json" };
+        if (tg?.initData) h["X-Telegram-Init-Data"] = tg.initData;
+        return h;
+      }
+
+      async function fetchClients() {
+        const r = await fetch("/api/clients", { headers: authHeaders() });
+        if (r.status === 401) throw Object.assign(new Error("unauthorized"), { status: 401 });
+        if (r.status === 403) throw Object.assign(new Error("forbidden"), { status: 403 });
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }
+
+      function renderStats(clients) {
+        const onl = clients.filter((c) => online(c.latestHandshakeAt)).length;
+        const rx = bytes(clients.reduce((s, c) => s + (c.transferRx || 0), 0));
+        const tx = bytes(clients.reduce((s, c) => s + (c.transferTx || 0), 0));
+        return `
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-val" style="color:var(--green)">${onl}</div>
+        <div class="stat-lbl">онлайн</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">${tx}</div>
+        <div class="stat-lbl">скачано</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">${rx}</div>
+        <div class="stat-lbl">загружено</div>
+      </div>
+    </div>`;
+      }
+
+      function renderCard(c) {
+        const d = daysLeft(c.expiresAt);
+        const state = cardState(c);
+        const isOpen = openCards.has(String(c.id));
+        const tgId = window.__tgId || "";
+
+        return `
+  <div class="card ${state} ${isOpen ? "open" : ""}" data-id="${c.id}" onclick="toggleCard('${c.id}')">
+    <div class="card-top">
+      <div class="card-icon ${state}">${stateIcon(state)}</div>
+      <div class="card-info">
+        <div class="card-name">${prettyName(c.name)}</div>
+        <div class="card-sub">${prettyDevice(c.name)} · ${c.ipv4Address}</div>
+      </div>
+      <div class="card-right">
+        <div class="card-days ${daysClass(d)}">${daysStr(d)}</div>
+        <div class="card-status">${state === "online" ? "активен" : state === "expiring" ? "скоро" : state === "expired" ? "истёк" : "офлайн"}</div>
+      </div>
+    </div>
+    <div class="prog"><div class="prog-fill" style="width:${barW(d)}%;background:${barColor(state)}"></div></div>
+    <div class="card-body">
+      <div class="card-rows">
+        <div class="card-row">
+          <div class="row-lbl">Скачано</div>
+          <div class="row-val g mono">${bytes(c.transferTx)}</div>
+        </div>
+        <div class="card-row">
+          <div class="row-lbl">Загружено</div>
+          <div class="row-val mono" style="color:var(--blue)">${bytes(c.transferRx)}</div>
+        </div>
+        <div class="card-row">
+          <div class="row-lbl">Истекает</div>
+          <div class="row-val m">${c.expiresAt ? dt(c.expiresAt) : "—"}</div>
+        </div>
+        <div class="card-row">
+          <div class="row-lbl">Хендшейк</div>
+          <div class="row-val m">${dt(c.latestHandshakeAt)}</div>
+        </div>
+      </div>
+      <a class="dl-btn" href="/api/config/${c.id}" download="${c.name}.conf"
+         onclick="event.stopPropagation(); addInitDataToLink(this)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Скачать конфиг
+      </a>
+    </div>
+  </div>`;
+      }
+
+      // Скачивание через fetch с заголовком авторизации
+      function addInitDataToLink(a) {
+        event.preventDefault();
+        const href = a.getAttribute("href");
+        fetch(href, { headers: authHeaders() })
+          .then((r) => {
+            if (!r.ok) throw new Error(r.status);
+            return r.blob();
+          })
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const tmp = document.createElement("a");
+            tmp.href = url;
+            tmp.download = a.download;
+            tmp.click();
+            URL.revokeObjectURL(url);
+          })
+          .catch(() => alert("Ошибка загрузки конфига"));
+      }
+
+      function toggleCard(id) {
+        const sid = String(id);
+        if (openCards.has(sid)) openCards.delete(sid);
+        else openCards.add(sid);
+        const el = document.querySelector(`[data-id="${id}"]`);
+        if (el) el.classList.toggle("open");
+      }
+
+      function updateStats(clients) {
+        const onl = clients.filter((c) => online(c.latestHandshakeAt)).length;
+        const rx = bytes(clients.reduce((s, c) => s + (c.transferRx || 0), 0));
+        const tx = bytes(clients.reduce((s, c) => s + (c.transferTx || 0), 0));
+
+        const vals = document.querySelectorAll(".stat-val");
+        if (vals[0]) vals[0].textContent = onl;
+        if (vals[1]) vals[1].textContent = tx;
+        if (vals[2]) vals[2].textContent = rx;
+      }
+
+      function updateCard(c) {
+        const el = document.querySelector(`[data-id="${c.id}"]`);
+        if (!el) return;
+
+        const d = daysLeft(c.expiresAt);
+        const state = cardState(c);
+
+        el.className = `card ${state} ${openCards.has(String(c.id)) ? "open" : ""}`;
+
+        const daysEl = el.querySelector(".card-days");
+        if (daysEl) {
+          const newText = daysStr(d);
+          if (daysEl.textContent !== newText) {
+            daysEl.textContent = newText;
+            daysEl.className = `card-days ${daysClass(d)}`;
+            daysEl.classList.add("updated");
+            setTimeout(() => daysEl.classList.remove("updated"), 500);
+          }
+        }
+
+        const fill = el.querySelector(".prog-fill");
+        if (fill) {
+          fill.style.width = barW(d) + "%";
+          fill.style.background = barColor(state);
+        }
+
+        const vals = el.querySelectorAll(".row-val");
+        if (vals[0]) vals[0].textContent = bytes(c.transferTx);
+        if (vals[1]) vals[1].textContent = bytes(c.transferRx);
+      }
+
+      function renderFull(clients, tgId) {
+        window.__tgId = tgId;
+        const firstName = tg?.initDataUnsafe?.user?.first_name || "";
+        const initials = firstName ? firstName[0].toUpperCase() : "?";
+
+        const sorted = [
+          ...clients.filter((c) => online(c.latestHandshakeAt)),
+          ...clients.filter((c) => {
+            const d = daysLeft(c.expiresAt);
+            return !online(c.latestHandshakeAt) && d !== null && d > 0 && d <= 5;
+          }),
+          ...clients.filter((c) => {
+            const d = daysLeft(c.expiresAt);
+            return !online(c.latestHandshakeAt) && (d === null || d > 5);
+          }),
+          ...clients.filter((c) => {
+            const d = daysLeft(c.expiresAt);
+            return !online(c.latestHandshakeAt) && d !== null && d <= 0;
+          }),
+        ];
+
+        const exp = clients.filter((c) => {
+          const d = daysLeft(c.expiresAt);
+          return d !== null && d > 0 && d <= 5;
+        }).length;
+
+        document.getElementById("root").innerHTML = `
+    <div class="hdr">
+      <div class="hdr-left">
+        <h1>VPN</h1>
+        <div class="live"><div class="live-dot"></div> live</div>
+      </div>
+      <div class="avatar">${initials}</div>
+    </div>
+
+    ${renderStats(clients)}
+
+    <div class="sec-lbl">Конфигурации <span>${clients.length} шт${exp ? ` · ${exp} скоро истекает` : ""}</span></div>
+
+    <div id="cards" class="${firstRender ? "intro" : ""}">
+      ${sorted.map((c) => renderCard(c)).join("")}
+    </div>
+  `;
+
+        firstRender = false;
+        lastData = clients.map((c) => c.id);
+      }
+
+      function smartUpdate(clients, tgId) {
+        const root = document.getElementById("root");
+        if (!root || root.querySelector(".screen")) {
+          renderFull(clients, tgId);
+          return;
+        }
+
+        const newIds = clients
+          .map((c) => String(c.id))
+          .sort()
+          .join(",");
+        const oldIds = (lastData || []).map(String).sort().join(",");
+
+        if (newIds !== oldIds) {
+          const cardsEl = document.getElementById("cards");
+          if (cardsEl) {
+            const sorted = [
+              ...clients.filter((c) => online(c.latestHandshakeAt)),
+              ...clients.filter((c) => {
+                const d = daysLeft(c.expiresAt);
+                return !online(c.latestHandshakeAt) && d !== null && d > 0 && d <= 5;
+              }),
+              ...clients.filter((c) => {
+                const d = daysLeft(c.expiresAt);
+                return !online(c.latestHandshakeAt) && (d === null || d > 5);
+              }),
+              ...clients.filter((c) => {
+                const d = daysLeft(c.expiresAt);
+                return !online(c.latestHandshakeAt) && d !== null && d <= 0;
+              }),
+            ];
+            cardsEl.innerHTML = sorted.map((c) => renderCard(c)).join("");
+          }
+        } else {
+          updateStats(clients);
+          for (const c of clients) updateCard(c);
+        }
+
+        lastData = clients.map((c) => c.id);
+      }
+
+      let tgId = null;
+
+      async function load(silent = false) {
+        if (!silent) {
+          document.getElementById("root").innerHTML = '<div class="screen"><div class="spinner"></div></div>';
+        }
+
+        try {
+          const { clients } = await fetchClients();
+          if (!clients?.length) {
+            document.getElementById("root").innerHTML = `
+        <div class="screen">
+          <div class="screen-ico">🔒</div>
+          <div class="screen-ttl">Нет конфигов</div>
+          <p class="screen-sub">Обратитесь к администратору для получения доступа.</p>
+        </div>`;
+            return;
+          }
+          tgId = tg?.initDataUnsafe?.user?.id || null;
+          smartUpdate(clients, tgId);
+        } catch (e) {
+          if (silent) return;
+          const msg = e.status === 401 || e.status === 403 ? "Откройте приложение через бота Telegram." : "Сервер недоступен. Попробуйте позже.";
+          document.getElementById("root").innerHTML = `
+      <div class="screen">
+        <div class="screen-ico">🔒</div>
+        <div class="screen-ttl">Нет доступа</div>
+        <p class="screen-sub">${msg}</p>
+      </div>`;
+        }
+      }
+
+      load();
+      setInterval(() => load(true), 30000);
+
+      if (typeof EventSource !== "undefined") {
+        const initDataEncoded = tg?.initData ? encodeURIComponent(tg.initData) : "";
+        const es = new EventSource(`/api/stream?init_data=${initDataEncoded}`);
+        es.onmessage = (e) => {
+          try {
+            const { clients } = JSON.parse(e.data);
+            if (clients?.length) smartUpdate(clients, tgId);
+          } catch {}
+        };
+        es.onerror = () => {
+          es.close();
+        };
+      }
+    </script>
+  </body>
+</html>

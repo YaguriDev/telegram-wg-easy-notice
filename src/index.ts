@@ -2,6 +2,9 @@ import "dotenv/config";
 import fs from "fs";
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
+import { startWebApp } from "./webapp/server.js";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface WgClient {
   id: string;
@@ -36,38 +39,22 @@ interface PendingLink {
   requestedAt: string;
 }
 
-const {
-  WG_BASE_URL,
-  WG_USERNAME,
-  WG_PASSWORD,
-  TELEGRAM_TOKEN,
-  TELEGRAM_OWNER_ID,
-  CHECK_INTERVAL_MINUTES,
-  CACHE_PATH,
-  THRESHOLD_DAYS,
-  CLIENTS_DB_PATH,
-  INVITE_CODES_PATH,
-} = process.env;
+// ─── Env ─────────────────────────────────────────────────────────────────────
 
-if (!WG_BASE_URL || !WG_USERNAME || !WG_PASSWORD || !TELEGRAM_TOKEN || !THRESHOLD_DAYS || !TELEGRAM_OWNER_ID)
-  throw new Error("Missing required env vars");
+const { WG_BASE_URL, WG_USERNAME, WG_PASSWORD, TELEGRAM_TOKEN, TELEGRAM_OWNER_ID, CHECK_INTERVAL_MINUTES, CACHE_PATH, THRESHOLD_DAYS, CLIENTS_DB_PATH, INVITE_CODES_PATH, WEBAPP_URL, WEBAPP_PORT } = process.env;
+
+if (!WG_BASE_URL || !WG_USERNAME || !WG_PASSWORD || !TELEGRAM_TOKEN || !THRESHOLD_DAYS || !TELEGRAM_OWNER_ID) throw new Error("Missing required env vars");
+
+if (!WEBAPP_URL) console.warn("[WG-BOT] WEBAPP_URL not set — WebApp button disabled");
 
 const OWNER_ID = Number(TELEGRAM_OWNER_ID);
 const HANDSHAKE_ONLINE_MS = 3 * 60 * 1000;
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+// ─── Shared state (экспортируем для webapp) ───────────────────────────────────
 
-const api = axios.create({
-  baseURL: WG_BASE_URL,
-  auth: { username: WG_USERNAME, password: WG_PASSWORD },
-  timeout: 10000,
-});
+export const sid = (v: unknown): string => String(v);
 
-const cacheFile = CACHE_PATH || "./cache.json";
-const clientsDbFile = CLIENTS_DB_PATH || "./clients.json";
-const inviteCodesFile = INVITE_CODES_PATH || "./invite_codes.json";
-
-const readJson = <T>(path: string, fallback: T): T => {
+export const readJson = <T>(path: string, fallback: T): T => {
   try {
     if (!fs.existsSync(path)) return fallback;
     return JSON.parse(fs.readFileSync(path, "utf-8")) as T;
@@ -76,17 +63,52 @@ const readJson = <T>(path: string, fallback: T): T => {
   }
 };
 
-const writeJson = (path: string, data: unknown) => fs.promises.writeFile(path, JSON.stringify(data, null, 2));
+export const writeJson = (path: string, data: unknown) => fs.promises.writeFile(path, JSON.stringify(data, null, 2));
 
-const sid = (v: unknown): string => String(v);
+export const cacheFile = CACHE_PATH || "./cache.json";
+export const clientsDbFile = CLIENTS_DB_PATH || "./clients.json";
+export const inviteCodesFile = INVITE_CODES_PATH || "./invite_codes.json";
 
+export let usersDb: Record<string, TgUser> = readJson<Record<string, TgUser>>(clientsDbFile, {});
+export let inviteCodes: Record<string, string> = readJson<Record<string, string>>(inviteCodesFile, {});
 let cache: Cache = readJson<Cache>(cacheFile, {});
-let usersDb: Record<string, TgUser> = readJson<Record<string, TgUser>>(clientsDbFile, {});
-let inviteCodes: Record<string, string> = readJson<Record<string, string>>(inviteCodesFile, {});
-const pendingLinks: Record<string, PendingLink> = {};
 
-const saveUsers = () => writeJson(clientsDbFile, usersDb);
+export const saveUsers = () => writeJson(clientsDbFile, usersDb);
 const saveInviteCodes = () => writeJson(inviteCodesFile, inviteCodes);
+
+// ─── WG API ───────────────────────────────────────────────────────────────────
+
+export const api = axios.create({
+  baseURL: WG_BASE_URL,
+  auth: { username: WG_USERNAME!, password: WG_PASSWORD! },
+  timeout: 10000,
+});
+
+// ─── DB helpers ───────────────────────────────────────────────────────────────
+
+export const getUserByTg = (tgId: number): TgUser | null => usersDb[sid(tgId)] ?? null;
+
+export const getUsersByWg = (wgId: string): TgUser[] => {
+  const n = sid(wgId);
+  return Object.values(usersDb).filter((u) => u.wgIds.map(sid).includes(n));
+};
+
+export const linkWgToTg = (wgId: string, tgId: number) => {
+  const key = sid(tgId);
+  const wk = sid(wgId);
+  if (!usersDb[key]) usersDb[key] = { tgId, wgIds: [wk], linkedAt: new Date().toISOString() };
+  else if (!usersDb[key].wgIds.map(sid).includes(wk)) usersDb[key].wgIds.push(wk);
+  saveUsers();
+};
+
+export const unlinkWgFromTg = (wgId: string, tgId: number) => {
+  const key = sid(tgId);
+  const wk = sid(wgId);
+  if (!usersDb[key]) return;
+  usersDb[key].wgIds = usersDb[key].wgIds.filter((id) => sid(id) !== wk);
+  if (!usersDb[key].wgIds.length) delete usersDb[key];
+  saveUsers();
+};
 
 const migrateDb = () => {
   const keys = Object.keys(usersDb);
@@ -115,38 +137,16 @@ const migrateDb = () => {
   console.log("[WG-BOT] DB migrated");
 };
 
-const getUserByTg = (tgId: number): TgUser | null => usersDb[sid(tgId)] ?? null;
-
-const getUsersByWg = (wgId: string): TgUser[] => {
-  const n = sid(wgId);
-  return Object.values(usersDb).filter((u) => u.wgIds.map(sid).includes(n));
-};
-
-const linkWgToTg = (wgId: string, tgId: number) => {
-  const key = sid(tgId);
-  const wk = sid(wgId);
-  if (!usersDb[key]) usersDb[key] = { tgId, wgIds: [wk], linkedAt: new Date().toISOString() };
-  else if (!usersDb[key].wgIds.map(sid).includes(wk)) usersDb[key].wgIds.push(wk);
-  saveUsers();
-};
-
-const unlinkWgFromTg = (wgId: string, tgId: number) => {
-  const key = sid(tgId);
-  const wk = sid(wgId);
-  if (!usersDb[key]) return;
-  usersDb[key].wgIds = usersDb[key].wgIds.filter((id) => sid(id) !== wk);
-  if (!usersDb[key].wgIds.length) delete usersDb[key];
-  saveUsers();
-};
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 const isOwner = (id: number | undefined) => id === OWNER_ID;
 
-const daysLeft = (expiresAt: string | null): number | null => {
+export const daysLeft = (expiresAt: string | null): number | null => {
   if (!expiresAt) return null;
   return Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86400000);
 };
 
-const isOnline = (h: string | null): boolean => {
+export const isOnline = (h: string | null): boolean => {
   if (!h) return false;
   return Date.now() - new Date(h).getTime() < HANDSHAKE_ONLINE_MS;
 };
@@ -160,8 +160,7 @@ const fmtBytes = (raw: unknown): string => {
   return `${b} B`;
 };
 
-const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "—";
+const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "—");
 
 const fmtDays = (days: number | null): string => {
   if (days === null) return "♾ Бессрочно";
@@ -170,7 +169,7 @@ const fmtDays = (days: number | null): string => {
   return `📅 ${days} дн.`;
 };
 
-const normalizeClient = (raw: any): WgClient => ({
+export const normalizeClient = (raw: any): WgClient => ({
   id: sid(raw.id),
   name: raw.name ?? "",
   ipv4Address: raw.ipv4Address ?? "",
@@ -187,7 +186,6 @@ const formatClientFull = (c: WgClient): string => {
   const days = daysLeft(c.expiresAt);
   const users = getUsersByWg(c.id);
   const linked = users.length ? users.map((u) => `🔗 tg:<code>${u.tgId}</code>`).join(", ") : "🔗 Не привязан";
-
   return (
     `${icon} <b>${c.name}</b>\n` +
     `├─ ID: <code>${c.id}</code>\n` +
@@ -223,11 +221,13 @@ const formatClientForUser = (c: WgClient): string => {
   );
 };
 
+// ─── WG API calls ─────────────────────────────────────────────────────────────
+
 let clientsCache: WgClient[] = [];
 let clientsCacheTs = 0;
 const CACHE_TTL = 5000;
 
-const fetchClients = async (): Promise<WgClient[]> => {
+export const fetchClients = async (): Promise<WgClient[]> => {
   try {
     const { data } = await api.get("/api/client");
     const list = (Array.isArray(data) ? data : [data]).map(normalizeClient);
@@ -240,7 +240,7 @@ const fetchClients = async (): Promise<WgClient[]> => {
   }
 };
 
-const fetchClient = async (id: string): Promise<WgClient | null> => {
+export const fetchClient = async (id: string): Promise<WgClient | null> => {
   const n = sid(id);
   if (Date.now() - clientsCacheTs < CACHE_TTL && clientsCache.length) {
     const found = clientsCache.find((c) => c.id === n);
@@ -267,7 +267,7 @@ const extendClient = async (id: string, days: number): Promise<WgClient | null> 
       return null;
     }
     if (!raw.expiresAt) {
-      await notifyOwner(`⚠️ <b>${raw.name}</b> — бессрочный, изменение не нужно.`);
+      await notifyOwner(`⚠️ <b>${raw.name}</b> — бессрочный.`);
       return null;
     }
 
@@ -280,19 +280,13 @@ const extendClient = async (id: string, days: number): Promise<WgClient | null> 
     delete payload.transferTx;
     delete payload.latestHandshakeAt;
     delete payload.endpoint;
-
-    // Если клиент выключен и после продления срок активен — включаем автоматически
-    if (!raw.enabled && base > new Date()) {
-      payload.enabled = true;
-    }
+    if (!raw.enabled && base > new Date()) payload.enabled = true;
 
     await api.post(`/api/client/${id}`, payload);
-
     clientsCacheTs = 0;
-    const updated = await fetchClient(id);
-    return updated;
+    return await fetchClient(id);
   } catch (err: any) {
-    await notifyOwner(`⚠️ Ошибка при изменении клиента <code>${id}</code>: ${err.message}`);
+    await notifyOwner(`⚠️ Ошибка при изменении <code>${id}</code>: ${err.message}`);
     return null;
   }
 };
@@ -313,10 +307,14 @@ const enableClient = async (id: string, enabled: boolean): Promise<WgClient | nu
     clientsCacheTs = 0;
     return await fetchClient(id);
   } catch (err: any) {
-    await notifyOwner(`⚠️ Ошибка при изменении статуса клиента <code>${id}</code>: ${err.message}`);
+    await notifyOwner(`⚠️ Ошибка статуса <code>${id}</code>: ${err.message}`);
     return null;
   }
 };
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+const bot = new TelegramBot(TELEGRAM_TOKEN!, { polling: true });
 
 const notifyOwner = async (text: string) => {
   try {
@@ -338,18 +336,11 @@ const notifyUser = async (tgId: number, text: string): Promise<boolean> => {
 const notifyLinkedUsersAboutTimeChange = async (c: WgClient, days: number) => {
   const users = getUsersByWg(c.id);
   if (!users.length) return;
-
   const verb = days > 0 ? `продлена на <b>${days}</b> дн.` : `сокращена на <b>${Math.abs(days)}</b> дн.`;
-  const dLeft = daysLeft(c.expiresAt);
-
   for (const u of users) {
     await notifyUser(
       u.tgId,
-      `📢 <b>Изменение подписки</b>\n\n` +
-        `👤 Конфиг: <b>${c.name}</b>\n` +
-        `🔄 Подписка ${verb}\n` +
-        `📅 Новая дата: <b>${fmtDate(c.expiresAt)}</b>\n` +
-        `⏳ Осталось: <b>${fmtDays(dLeft)}</b>`,
+      `📢 <b>Изменение подписки</b>\n\n` + `👤 Конфиг: <b>${c.name}</b>\n` + `🔄 Подписка ${verb}\n` + `📅 Новая дата: <b>${fmtDate(c.expiresAt)}</b>\n` + `⏳ Осталось: <b>${fmtDays(daysLeft(c.expiresAt))}</b>`,
     );
   }
 };
@@ -357,18 +348,9 @@ const notifyLinkedUsersAboutTimeChange = async (c: WgClient, days: number) => {
 const notifyClientAboutExpiry = async (c: WgClient, days: number) => {
   const users = getUsersByWg(c.id);
   const exp = fmtDate(c.expiresAt);
-
-  await notifyOwner(
-    `⏳ <b>${c.name}</b> — истекает через <b>${days} дн.</b>\n📅 ${exp}` +
-      (users.length ? `\n🔗 ${users.map((u) => `tg:<code>${u.tgId}</code>`).join(", ")}` : "\n🔗 Не привязан"),
-  );
-
+  await notifyOwner(`⏳ <b>${c.name}</b> — истекает через <b>${days} дн.</b>\n📅 ${exp}` + (users.length ? `\n🔗 ${users.map((u) => `tg:<code>${u.tgId}</code>`).join(", ")}` : "\n🔗 Не привязан"));
   for (const u of users) {
-    await notifyUser(
-      u.tgId,
-      `⚠️ <b>VPN «${c.name}» истекает через ${days} дн.</b>\n` +
-        `📅 ${exp}\n\nСвяжитесь с администратором для продления.`,
-    );
+    await notifyUser(u.tgId, `⚠️ <b>VPN «${c.name}» истекает через ${days} дн.</b>\n📅 ${exp}\n\nСвяжитесь с администратором.`);
   }
 };
 
@@ -380,6 +362,8 @@ const broadcastAll = async (text: string): Promise<{ total: number; ok: number }
   }
   return { total: entries.length, ok };
 };
+
+// ─── Keyboards ────────────────────────────────────────────────────────────────
 
 const clientKeyboard = (wgId: string, enabled?: boolean): TelegramBot.InlineKeyboardMarkup => ({
   inline_keyboard: [
@@ -395,7 +379,14 @@ const clientKeyboard = (wgId: string, enabled?: boolean): TelegramBot.InlineKeyb
   ],
 });
 
-const thresholds = THRESHOLD_DAYS.split(",").map(Number);
+const webAppKeyboard = (): TelegramBot.InlineKeyboardMarkup | undefined => {
+  if (!WEBAPP_URL) return undefined;
+  return { inline_keyboard: [[{ text: "🖥 Открыть кабинет", web_app: { url: WEBAPP_URL } }]] };
+};
+
+// ─── Background job ───────────────────────────────────────────────────────────
+
+const thresholds = THRESHOLD_DAYS!.split(",").map(Number);
 
 const processClients = async () => {
   try {
@@ -403,10 +394,8 @@ const processClients = async () => {
     for (const c of clients) {
       const left = daysLeft(c.expiresAt);
       if (left === null) continue;
-
       const prev = cache[c.id] || { lastDaysLeft: null, lastNotified: null };
       const toNotify = thresholds.filter((t) => left <= t && (prev.lastDaysLeft ?? Infinity) > t);
-
       if (toNotify.length > 0) {
         await notifyClientAboutExpiry(c, left);
         cache[c.id] = { lastDaysLeft: left, lastNotified: new Date().toISOString() };
@@ -423,6 +412,8 @@ const processClients = async () => {
   }
 };
 
+// ─── Invite codes ─────────────────────────────────────────────────────────────
+
 const generateCode = (wgId: string): string => {
   const code = Math.random().toString(36).slice(2, 10).toUpperCase();
   inviteCodes[code] = sid(wgId);
@@ -430,8 +421,11 @@ const generateCode = (wgId: string): string => {
   return code;
 };
 
-const sortByExpiry = (clients: WgClient[]) =>
-  [...clients].sort((a, b) => (daysLeft(a.expiresAt) ?? Infinity) - (daysLeft(b.expiresAt) ?? Infinity));
+const sortByExpiry = (clients: WgClient[]) => [...clients].sort((a, b) => (daysLeft(a.expiresAt) ?? Infinity) - (daysLeft(b.expiresAt) ?? Infinity));
+
+const pendingLinks: Record<string, PendingLink> = {};
+
+// ─── Bot commands ─────────────────────────────────────────────────────────────
 
 bot.onText(/\/list(?:\s+(\d+))?/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
@@ -439,13 +433,8 @@ bot.onText(/\/list(?:\s+(\d+))?/, async (msg, match) => {
   const n = match?.[1] ? Number(match[1]) : undefined;
   if (n) clients = clients.slice(0, n);
   if (!clients.length) return bot.sendMessage(msg.chat.id, "❌ Нет клиентов.");
-
   const lines = clients.map(formatClientLine).join("\n");
-  await bot.sendMessage(
-    msg.chat.id,
-    `📋 <b>Клиенты (${clients.length})</b>\n\n${lines}\n\nДетали: /client &lt;id&gt;`,
-    { parse_mode: "HTML" },
-  );
+  await bot.sendMessage(msg.chat.id, `📋 <b>Клиенты (${clients.length})</b>\n\n${lines}\n\nДетали: /client &lt;id&gt;`, { parse_mode: "HTML" });
 });
 
 bot.onText(/\/clients(?:\s+(\d+))?/, async (msg, match) => {
@@ -454,15 +443,9 @@ bot.onText(/\/clients(?:\s+(\d+))?/, async (msg, match) => {
   const n = match?.[1] ? Number(match[1]) : undefined;
   if (n) clients = clients.slice(0, n);
   if (!clients.length) return bot.sendMessage(msg.chat.id, "❌ Нет клиентов.");
-
-  await bot.sendMessage(msg.chat.id, `📋 <b>WireGuard клиенты</b> — всего: <b>${clients.length}</b>`, {
-    parse_mode: "HTML",
-  });
+  await bot.sendMessage(msg.chat.id, `📋 <b>WireGuard клиенты</b> — всего: <b>${clients.length}</b>`, { parse_mode: "HTML" });
   for (const c of clients) {
-    await bot.sendMessage(msg.chat.id, formatClientFull(c), {
-      parse_mode: "HTML",
-      reply_markup: clientKeyboard(c.id, c.enabled),
-    });
+    await bot.sendMessage(msg.chat.id, formatClientFull(c), { parse_mode: "HTML", reply_markup: clientKeyboard(c.id, c.enabled) });
     await new Promise((r) => setTimeout(r, 300));
   }
 });
@@ -473,10 +456,7 @@ bot.onText(/\/client\s+(\S+)/, async (msg, match) => {
   if (!id) return bot.sendMessage(msg.chat.id, "❌ /client &lt;id&gt;", { parse_mode: "HTML" });
   const c = await fetchClient(id);
   if (!c) return bot.sendMessage(msg.chat.id, `❌ Клиент <code>${id}</code> не найден`, { parse_mode: "HTML" });
-  await bot.sendMessage(msg.chat.id, formatClientFull(c), {
-    parse_mode: "HTML",
-    reply_markup: clientKeyboard(c.id, c.enabled),
-  });
+  await bot.sendMessage(msg.chat.id, formatClientFull(c), { parse_mode: "HTML", reply_markup: clientKeyboard(c.id, c.enabled) });
 });
 
 bot.onText(/\/time\s+(\S+)\s+([+-]?\d+)/, async (msg, match) => {
@@ -487,11 +467,7 @@ bot.onText(/\/time\s+(\S+)\s+([+-]?\d+)/, async (msg, match) => {
   const updated = await extendClient(id, days);
   const label = days > 0 ? `+${days}` : `${days}`;
   if (updated) {
-    await bot.sendMessage(
-      msg.chat.id,
-      `✅ <b>${updated.name}</b>: <b>${label} дн.</b>\n📅 Новая дата: <b>${fmtDate(updated.expiresAt)}</b>`,
-      { parse_mode: "HTML" },
-    );
+    await bot.sendMessage(msg.chat.id, `✅ <b>${updated.name}</b>: <b>${label} дн.</b>\n📅 ${fmtDate(updated.expiresAt)}`, { parse_mode: "HTML" });
     await notifyLinkedUsersAboutTimeChange(updated, days);
   } else {
     await bot.sendMessage(msg.chat.id, `❌ Не удалось изменить <code>${id}</code>`, { parse_mode: "HTML" });
@@ -504,11 +480,7 @@ bot.onText(/\/extend\s+(\S+)/, async (msg, match) => {
   if (!id) return bot.sendMessage(msg.chat.id, "❌ /extend &lt;id&gt;", { parse_mode: "HTML" });
   const updated = await extendClient(id, 30);
   if (updated) {
-    await bot.sendMessage(
-      msg.chat.id,
-      `✅ <b>${updated.name}</b> +30 дней.\n📅 Новая дата: <b>${fmtDate(updated.expiresAt)}</b>`,
-      { parse_mode: "HTML" },
-    );
+    await bot.sendMessage(msg.chat.id, `✅ <b>${updated.name}</b> +30 дней.\n📅 ${fmtDate(updated.expiresAt)}`, { parse_mode: "HTML" });
     await notifyLinkedUsersAboutTimeChange(updated, 30);
   } else {
     await bot.sendMessage(msg.chat.id, `❌ Не удалось продлить <code>${id}</code>`, { parse_mode: "HTML" });
@@ -519,25 +491,22 @@ bot.onText(/\/link\s+(\S+)\s+(\d+)/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
   const wgId = match?.[1]?.trim();
   const tgId = Number(match?.[2]);
-  if (!wgId || isNaN(tgId))
-    return bot.sendMessage(msg.chat.id, "❌ /link &lt;wg_id&gt; &lt;tg_id&gt;", { parse_mode: "HTML" });
+  if (!wgId || isNaN(tgId)) return bot.sendMessage(msg.chat.id, "❌ /link &lt;wg_id&gt; &lt;tg_id&gt;", { parse_mode: "HTML" });
   const c = await fetchClient(wgId);
   if (!c) return bot.sendMessage(msg.chat.id, `❌ WG <code>${wgId}</code> не найден`, { parse_mode: "HTML" });
   linkWgToTg(c.id, tgId);
   await bot.sendMessage(msg.chat.id, `✅ <b>${c.name}</b> → tg:<code>${tgId}</code>`, { parse_mode: "HTML" });
-  await notifyUser(tgId, `✅ <b>VPN-конфиг привязан!</b>\n\n👤 <b>${c.name}</b>\nИспользуйте /me для статуса.`);
+  const webKb = webAppKeyboard();
+  await bot.sendMessage(tgId, `✅ <b>VPN-конфиг привязан!</b>\n\n👤 <b>${c.name}</b>\nИспользуйте /me для статуса.`, { parse_mode: "HTML", ...(webKb && { reply_markup: webKb }) });
 });
 
 bot.onText(/\/unlink\s+(\S+)\s+(\d+)/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
   const wgId = match?.[1]?.trim();
   const tgId = Number(match?.[2]);
-  if (!wgId || isNaN(tgId))
-    return bot.sendMessage(msg.chat.id, "❌ /unlink &lt;wg_id&gt; &lt;tg_id&gt;", { parse_mode: "HTML" });
+  if (!wgId || isNaN(tgId)) return bot.sendMessage(msg.chat.id, "❌ /unlink &lt;wg_id&gt; &lt;tg_id&gt;", { parse_mode: "HTML" });
   unlinkWgFromTg(wgId, tgId);
-  await bot.sendMessage(msg.chat.id, `✅ <code>${wgId}</code> отвязан от tg:<code>${tgId}</code>`, {
-    parse_mode: "HTML",
-  });
+  await bot.sendMessage(msg.chat.id, `✅ <code>${wgId}</code> отвязан от tg:<code>${tgId}</code>`, { parse_mode: "HTML" });
 });
 
 bot.onText(/\/gencode\s+(\S+)/, async (msg, match) => {
@@ -548,12 +517,7 @@ bot.onText(/\/gencode\s+(\S+)/, async (msg, match) => {
   if (!c) return bot.sendMessage(msg.chat.id, `❌ <code>${wgId}</code> не найден`, { parse_mode: "HTML" });
   const code = generateCode(c.id);
   const me = await bot.getMe();
-  await bot.sendMessage(
-    msg.chat.id,
-    `🔑 Код для <b>${c.name}</b>:\n\n<code>${code}</code>\n\n` +
-      `Ссылка: <code>https://t.me/${me.username}?start=${code}</code>\n⚠️ Одноразовый.`,
-    { parse_mode: "HTML" },
-  );
+  await bot.sendMessage(msg.chat.id, `🔑 Код для <b>${c.name}</b>:\n\n<code>${code}</code>\n\n` + `Ссылка: <code>https://t.me/${me.username}?start=${code}</code>\n⚠️ Одноразовый.`, { parse_mode: "HTML" });
 });
 
 bot.onText(/\/linked/, async (msg) => {
@@ -561,7 +525,6 @@ bot.onText(/\/linked/, async (msg) => {
   const entries = Object.values(usersDb);
   if (!entries.length) return bot.sendMessage(msg.chat.id, "📭 Нет привязанных пользователей.");
   const clients = await fetchClients();
-
   const lines = entries.map((u) => {
     const names = u.wgIds
       .map((wid) => {
@@ -586,30 +549,23 @@ bot.onText(/\/msg\s+(\d+)\s+([\s\S]+)/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
   const tgId = Number(match?.[1]);
   const text = match?.[2]?.trim();
-  if (!tgId || !text)
-    return bot.sendMessage(msg.chat.id, "❌ /msg &lt;tg_id&gt; &lt;текст&gt;", { parse_mode: "HTML" });
+  if (!tgId || !text) return bot.sendMessage(msg.chat.id, "❌ /msg &lt;tg_id&gt; &lt;текст&gt;", { parse_mode: "HTML" });
   const sent = await notifyUser(tgId, `📣 <b>От администратора:</b>\n\n${text}`);
-  await bot.sendMessage(msg.chat.id, sent ? `✅ → tg:<code>${tgId}</code>` : `❌ Не доставлено (бот заблокирован?)`, {
-    parse_mode: "HTML",
-  });
+  await bot.sendMessage(msg.chat.id, sent ? `✅ → tg:<code>${tgId}</code>` : `❌ Не доставлено`, { parse_mode: "HTML" });
 });
 
 bot.onText(/\/msgwg\s+(\S+)\s+([\s\S]+)/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
   const wgId = match?.[1]?.trim();
   const text = match?.[2]?.trim();
-  if (!wgId || !text)
-    return bot.sendMessage(msg.chat.id, "❌ /msgwg &lt;wg_id&gt; &lt;текст&gt;", { parse_mode: "HTML" });
+  if (!wgId || !text) return bot.sendMessage(msg.chat.id, "❌ /msgwg &lt;wg_id&gt; &lt;текст&gt;", { parse_mode: "HTML" });
   const users = getUsersByWg(wgId);
-  if (!users.length)
-    return bot.sendMessage(msg.chat.id, `❌ <code>${wgId}</code> — не привязан.`, { parse_mode: "HTML" });
+  if (!users.length) return bot.sendMessage(msg.chat.id, `❌ <code>${wgId}</code> — не привязан.`, { parse_mode: "HTML" });
   let ok = 0;
   for (const u of users) {
     if (await notifyUser(u.tgId, `📣 <b>От администратора:</b>\n\n${text}`)) ok++;
   }
-  await bot.sendMessage(msg.chat.id, `✅ <b>${ok}/${users.length}</b> для <code>${wgId}</code>.`, {
-    parse_mode: "HTML",
-  });
+  await bot.sendMessage(msg.chat.id, `✅ <b>${ok}/${users.length}</b> для <code>${wgId}</code>.`, { parse_mode: "HTML" });
 });
 
 bot.onText(/\/enable\s+(\S+)/, async (msg, match) => {
@@ -618,14 +574,9 @@ bot.onText(/\/enable\s+(\S+)/, async (msg, match) => {
   if (!id) return bot.sendMessage(msg.chat.id, "❌ /enable &lt;id&gt;", { parse_mode: "HTML" });
   const c = await fetchClient(id);
   if (!c) return bot.sendMessage(msg.chat.id, `❌ Клиент <code>${id}</code> не найден`, { parse_mode: "HTML" });
-  const newEnabled = !c.enabled;
-  const updated = await enableClient(id, newEnabled);
+  const updated = await enableClient(id, !c.enabled);
   if (updated) {
-    const statusIcon = newEnabled ? "🟢 Включён" : "🔴 Выключен";
-    await bot.sendMessage(msg.chat.id, `${statusIcon} <b>${updated.name}</b>`, {
-      parse_mode: "HTML",
-      reply_markup: clientKeyboard(updated.id, updated.enabled),
-    });
+    await bot.sendMessage(msg.chat.id, `${updated.enabled ? "🟢 Включён" : "🔴 Выключен"} <b>${updated.name}</b>`, { parse_mode: "HTML", reply_markup: clientKeyboard(updated.id, updated.enabled) });
   } else {
     await bot.sendMessage(msg.chat.id, `❌ Не удалось изменить статус <code>${id}</code>`, { parse_mode: "HTML" });
   }
@@ -634,26 +585,15 @@ bot.onText(/\/enable\s+(\S+)/, async (msg, match) => {
 bot.onText(/\/timeall\s+([+-]?\d+)/, async (msg, match) => {
   if (!isOwner(msg.from?.id)) return;
   const days = Number(match?.[1]);
-  if (isNaN(days) || days === 0)
-    return bot.sendMessage(msg.chat.id, "❌ /timeall &lt;±дни&gt;", { parse_mode: "HTML" });
-
+  if (isNaN(days) || days === 0) return bot.sendMessage(msg.chat.id, "❌ /timeall &lt;±дни&gt;", { parse_mode: "HTML" });
   const clients = await fetchClients();
   const now = new Date();
-  // Активные: expiresAt не null и больше текущего времени
   const active = clients.filter((c) => c.expiresAt !== null && new Date(c.expiresAt) > now);
-
-  if (!active.length)
-    return bot.sendMessage(msg.chat.id, "❌ Нет активных клиентов с ограниченным сроком.", { parse_mode: "HTML" });
-
+  if (!active.length) return bot.sendMessage(msg.chat.id, "❌ Нет активных клиентов с ограниченным сроком.", { parse_mode: "HTML" });
   const label = days > 0 ? `+${days}` : `${days}`;
-  await bot.sendMessage(
-    msg.chat.id,
-    `⏳ Применяю <b>${label} дн.</b> для <b>${active.length}</b> активных клиентов...`,
-    { parse_mode: "HTML" },
-  );
-
-  let ok = 0;
-  let fail = 0;
+  await bot.sendMessage(msg.chat.id, `⏳ Применяю <b>${label} дн.</b> для <b>${active.length}</b> клиентов...`, { parse_mode: "HTML" });
+  let ok = 0,
+    fail = 0;
   for (const c of active) {
     const updated = await extendClient(c.id, days);
     if (updated) {
@@ -664,26 +604,19 @@ bot.onText(/\/timeall\s+([+-]?\d+)/, async (msg, match) => {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-
-  await bot.sendMessage(
-    msg.chat.id,
-    `✅ <b>Готово!</b>\n\n` +
-      `📊 Обработано: <b>${active.length}</b>\n` +
-      `✅ Успешно: <b>${ok}</b>\n` +
-      (fail ? `❌ Ошибок: <b>${fail}</b>\n` : ``) +
-      `⏱ Изменение: <b>${label} дн.</b>`,
-    { parse_mode: "HTML" },
-  );
+  await bot.sendMessage(msg.chat.id, `✅ <b>Готово!</b>\n\n📊 Обработано: <b>${active.length}</b>\n✅ Успешно: <b>${ok}</b>\n` + (fail ? `❌ Ошибок: <b>${fail}</b>\n` : ``) + `⏱ Изменение: <b>${label} дн.</b>`, {
+    parse_mode: "HTML",
+  });
 });
+
+// ─── Callbacks ────────────────────────────────────────────────────────────────
 
 bot.on("callback_query", async (query) => {
   if (!isOwner(query.from.id)) {
     await bot.answerCallbackQuery(query.id, { text: "⛔ Нет прав" });
     return;
   }
-
-  const data = query.data ?? "";
-  const parts = data.split(":");
+  const parts = (query.data ?? "").split(":");
   const action = parts[0];
   const wgId = parts[1] ?? "";
   const extra = parts.slice(2).join(":");
@@ -694,19 +627,11 @@ bot.on("callback_query", async (query) => {
       await bot.answerCallbackQuery(query.id, { text: "❌ Не найден" });
       return;
     }
-    const newEnabled = !c.enabled;
-    const updated = await enableClient(wgId, newEnabled);
-    await bot.answerCallbackQuery(query.id, {
-      text: updated ? (newEnabled ? "🟢 Включён" : "🔴 Выключен") : "❌ Ошибка",
-    });
+    const updated = await enableClient(wgId, !c.enabled);
+    await bot.answerCallbackQuery(query.id, { text: updated ? (updated.enabled ? "🟢 Включён" : "🔴 Выключен") : "❌ Ошибка" });
     if (updated && query.message) {
       await bot
-        .editMessageText(formatClientFull(updated), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: "HTML",
-          reply_markup: clientKeyboard(updated.id, updated.enabled),
-        })
+        .editMessageText(formatClientFull(updated), { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "HTML", reply_markup: clientKeyboard(updated.id, updated.enabled) })
         .catch(() => {});
     }
     return;
@@ -718,14 +643,7 @@ bot.on("callback_query", async (query) => {
     const label = days > 0 ? `+${days}` : `${days}`;
     await bot.answerCallbackQuery(query.id, { text: updated ? `✅ ${label} дней` : "❌ Ошибка" });
     if (updated && query.message) {
-      await bot
-        .editMessageText(formatClientFull(updated), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: "HTML",
-          reply_markup: clientKeyboard(updated.id),
-        })
-        .catch(() => {});
+      await bot.editMessageText(formatClientFull(updated), { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "HTML", reply_markup: clientKeyboard(updated.id) }).catch(() => {});
       await notifyLinkedUsersAboutTimeChange(updated, days);
     }
     return;
@@ -736,14 +654,7 @@ bot.on("callback_query", async (query) => {
     const c = await fetchClient(wgId);
     await bot.answerCallbackQuery(query.id, { text: "🔄 Обновлено" });
     if (c && query.message) {
-      await bot
-        .editMessageText(formatClientFull(c), {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: "HTML",
-          reply_markup: clientKeyboard(c.id, c.enabled),
-        })
-        .catch(() => {});
+      await bot.editMessageText(formatClientFull(c), { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "HTML", reply_markup: clientKeyboard(c.id, c.enabled) }).catch(() => {});
     }
     return;
   }
@@ -768,8 +679,7 @@ bot.on("callback_query", async (query) => {
   }
 
   if (action === "approve_link") {
-    const pendingKey = extra;
-    const pending = pendingLinks[pendingKey];
+    const pending = pendingLinks[extra];
     if (!pending) {
       await bot.answerCallbackQuery(query.id, { text: "❌ Устарел" });
       return;
@@ -780,37 +690,22 @@ bot.on("callback_query", async (query) => {
       return;
     }
     linkWgToTg(c.id, pending.tgId);
-    delete pendingLinks[pendingKey];
+    delete pendingLinks[extra];
     await bot.answerCallbackQuery(query.id, { text: "✅ Подтверждено" });
     if (query.message) {
-      await bot
-        .editMessageText(`✅ <b>Привязано</b>\n${c.name} → tg:<code>${pending.tgId}</code>`, {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: "HTML",
-        })
-        .catch(() => {});
+      await bot.editMessageText(`✅ <b>Привязано</b>\n${c.name} → tg:<code>${pending.tgId}</code>`, { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "HTML" }).catch(() => {});
     }
-    await notifyUser(
-      pending.tgId,
-      `✅ <b>Привязка подтверждена!</b>\n\n👤 <b>${c.name}</b>\nИспользуйте /me для статуса.`,
-    );
+    const webKb = webAppKeyboard();
+    await bot.sendMessage(pending.tgId, `✅ <b>Привязка подтверждена!</b>\n\n👤 <b>${c.name}</b>\nИспользуйте /me для статуса.`, { parse_mode: "HTML", ...(webKb && { reply_markup: webKb }) });
     return;
   }
 
   if (action === "reject_link") {
-    const pendingKey = extra;
-    const pending = pendingLinks[pendingKey];
-    delete pendingLinks[pendingKey];
+    const pending = pendingLinks[extra];
+    delete pendingLinks[extra];
     await bot.answerCallbackQuery(query.id, { text: "❌ Отклонено" });
     if (query.message) {
-      await bot
-        .editMessageText("❌ <b>Запрос отклонён</b>", {
-          chat_id: query.message.chat.id,
-          message_id: query.message.message_id,
-          parse_mode: "HTML",
-        })
-        .catch(() => {});
+      await bot.editMessageText("❌ <b>Запрос отклонён</b>", { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: "HTML" }).catch(() => {});
     }
     if (pending) await notifyUser(pending.tgId, "❌ Запрос на привязку отклонён.");
     return;
@@ -818,6 +713,8 @@ bot.on("callback_query", async (query) => {
 
   await bot.answerCallbackQuery(query.id);
 });
+
+// ─── /start ───────────────────────────────────────────────────────────────────
 
 bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   const tgId = msg.from?.id;
@@ -827,23 +724,10 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     await bot.sendMessage(
       msg.chat.id,
       `👋 <b>Привет, админ!</b>\n\n` +
-        `<b>Клиенты:</b>\n` +
-        `/list [N] — быстрый список\n` +
-        `/clients [N] — карточки с кнопками\n` +
-        `/client &lt;id&gt; — одна карточка\n` +
-        `/enable &lt;id&gt; — вкл/выкл клиента\n` +
-        `/extend &lt;id&gt; — +30 дней\n` +
-        `/time &lt;id&gt; &lt;±дни&gt; — изменить срок\n` +
-        `/timeall &lt;±дни&gt; — изменить срок всем активным\n\n` +
-        `<b>Привязки:</b>\n` +
-        `/link &lt;wg_id&gt; &lt;tg_id&gt;\n` +
-        `/unlink &lt;wg_id&gt; &lt;tg_id&gt;\n` +
-        `/gencode &lt;wg_id&gt; — инвайт\n` +
-        `/linked — все привязки\n\n` +
-        `<b>Сообщения:</b>\n` +
-        `/msg &lt;tg_id&gt; &lt;текст&gt;\n` +
-        `/msgwg &lt;wg_id&gt; &lt;текст&gt;\n` +
-        `/broadcast &lt;текст&gt; — всем`,
+        `<b>Клиенты:</b>\n/list [N] — быстрый список\n/clients [N] — карточки\n/client &lt;id&gt; — одна карточка\n` +
+        `/enable &lt;id&gt; — вкл/выкл\n/extend &lt;id&gt; — +30 дней\n/time &lt;id&gt; &lt;±дни&gt;\n/timeall &lt;±дни&gt;\n\n` +
+        `<b>Привязки:</b>\n/link &lt;wg_id&gt; &lt;tg_id&gt;\n/unlink &lt;wg_id&gt; &lt;tg_id&gt;\n/gencode &lt;wg_id&gt;\n/linked\n\n` +
+        `<b>Сообщения:</b>\n/msg &lt;tg_id&gt; &lt;текст&gt;\n/msgwg &lt;wg_id&gt; &lt;текст&gt;\n/broadcast &lt;текст&gt;`,
       { parse_mode: "HTML" },
     );
     return;
@@ -858,42 +742,28 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
         const c = await fetchClient(wgId);
         if (c) await bot.sendMessage(msg.chat.id, formatClientForUser(c), { parse_mode: "HTML" });
       }
+      const webKb = webAppKeyboard();
+      if (webKb) await bot.sendMessage(msg.chat.id, "📊 Подробная статистика и конфиги:", { reply_markup: webKb });
     } else {
-      await bot.sendMessage(
-        msg.chat.id,
-        `👋 Привет!\n\nБот для отслеживания VPN-подписки.\nПопросите инвайт-ссылку у администратора.`,
-      );
+      await bot.sendMessage(msg.chat.id, `👋 Привет!\n\nБот для отслеживания VPN-подписки.\nПопросите инвайт у администратора.`);
     }
     return;
   }
 
   const wgId = inviteCodes[code];
   if (!wgId) return bot.sendMessage(msg.chat.id, "❌ Неверный или использованный код.");
-
   const c = await fetchClient(wgId);
   if (!c) return bot.sendMessage(msg.chat.id, "❌ VPN не найден. Обратитесь к администратору.");
-
   const existing = getUserByTg(tgId);
   if (existing?.wgIds.map(sid).includes(sid(c.id))) {
     return bot.sendMessage(msg.chat.id, `ℹ️ <b>${c.name}</b> уже привязан.`, { parse_mode: "HTML" });
   }
 
   const pendingKey = `${c.id}_${tgId}`;
-  pendingLinks[pendingKey] = {
-    wgId: c.id,
-    tgId,
-    tgUsername: msg.from?.username ?? null,
-    tgFirstName: msg.from?.first_name ?? null,
-    requestedAt: new Date().toISOString(),
-  };
+  pendingLinks[pendingKey] = { wgId: c.id, tgId, tgUsername: msg.from?.username ?? null, tgFirstName: msg.from?.first_name ?? null, requestedAt: new Date().toISOString() };
 
   const userName = `${msg.from?.first_name ?? ""}${msg.from?.username ? ` (@${msg.from.username})` : ""}`.trim();
-
-  await notifyOwner(
-    `🔔 <b>Запрос на привязку</b>\n\n` +
-      `👤 <b>${userName}</b>\n🆔 <code>${tgId}</code>\n` +
-      `📡 <b>${c.name}</b> (<code>${c.id}</code>)`,
-  );
+  await notifyOwner(`🔔 <b>Запрос на привязку</b>\n\n👤 <b>${userName}</b>\n🆔 <code>${tgId}</code>\n📡 <b>${c.name}</b> (<code>${c.id}</code>)`);
   await bot.sendMessage(OWNER_ID, "Подтвердить?", {
     reply_markup: {
       inline_keyboard: [
@@ -904,29 +774,43 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       ],
     },
   });
-
   delete inviteCodes[code];
   await saveInviteCodes();
-
   await bot.sendMessage(msg.chat.id, `⏳ Запрос отправлен. Ожидайте подтверждения.`);
 });
+
+// ─── /me ──────────────────────────────────────────────────────────────────────
 
 bot.onText(/\/me/, async (msg) => {
   const tgId = msg.from?.id;
   if (!tgId || isOwner(tgId)) return;
-
   const user = getUserByTg(tgId);
-  if (!user?.wgIds.length) {
-    return bot.sendMessage(msg.chat.id, "❌ Не привязаны к VPN.\nПопросите инвайт у администратора.");
-  }
-
+  if (!user?.wgIds.length) return bot.sendMessage(msg.chat.id, "❌ Не привязаны к VPN.\nПопросите инвайт у администратора.");
   for (const wgId of user.wgIds) {
     const c = await fetchClient(wgId);
     if (c) await bot.sendMessage(msg.chat.id, formatClientForUser(c), { parse_mode: "HTML" });
   }
+  const webKb = webAppKeyboard();
+  if (webKb) await bot.sendMessage(msg.chat.id, "📊 Подробная статистика:", { reply_markup: webKb });
 });
 
+// ─── Setup & start ────────────────────────────────────────────────────────────
+
 const setupCommands = async () => {
+  if (WEBAPP_URL) {
+    try {
+      await (bot as any).setMyDefaultAdministratorRights?.();
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setChatMenuButton`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ menu_button: { type: "web_app", text: "Кабинет", web_app: { url: WEBAPP_URL } } }),
+      });
+      console.log("[WG-BOT] Menu button set");
+    } catch (e) {
+      console.warn("[WG-BOT] Could not set menu button:", e);
+    }
+  }
+
   await bot.setMyCommands(
     [
       { command: "list", description: "📋 Список клиентов [N]" },
@@ -961,7 +845,20 @@ const start = async () => {
   await setupCommands();
   await processClients();
   setInterval(processClients, Number(CHECK_INTERVAL_MINUTES || 10) * 60 * 1000);
+
+  startWebApp({
+    port: Number(WEBAPP_PORT || 3001),
+    botToken: TELEGRAM_TOKEN!,
+    wgApi: api,
+    getUsersByTgId: (tgId: string) => {
+      const user = usersDb[tgId];
+      return user?.wgIds ?? [];
+    },
+    fetchClients,
+  });
+
   console.log("[WG-BOT] Started ✅");
+  if (WEBAPP_URL) console.log(`[WG-BOT] WebApp: ${WEBAPP_URL}`);
 };
 
 start();
